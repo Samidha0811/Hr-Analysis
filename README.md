@@ -1,5 +1,4 @@
 # 📊 HR Analytics: Employee Attrition Predictor
-# 📊 HR Analytics: Employee Attrition Predictor
 
 ![Status](https://img.shields.io/badge/Status-Operational-success)
 ![Python](https://img.shields.io/badge/Python-3.8%2B-blue)
