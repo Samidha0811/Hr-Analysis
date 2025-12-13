@@ -16,7 +16,7 @@ A specialized, hybrid analytics platform designed to visualize workforce trends 
 
 The application operates on a decoupled architecture ensuring speed and modularity.
 
-```mermaid
+
 graph TD
     User[User] -->|Uploads CSV| UI[React Dashboard (Browser)]
     UI -->|Parses & Visualizes| Stats[Local Analytics Engine]
@@ -31,9 +31,7 @@ graph TD
     end
     
     API -->|JSON Response| UI
-```
 
----
 
 ## 🌟 Key Features
 
