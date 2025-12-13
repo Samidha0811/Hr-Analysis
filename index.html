@@ -1,0 +1,1943 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>HR Analytics: Attrition Predictor</title>
+
+    <!-- 🛡️ SAFETY PATCH: Fixes 'Illegal Constructor' crashes in preview -->
+    <script>
+        (function () {
+            try {
+                delete window.MessageChannel;
+                window.MessageChannel = undefined;
+            } catch (e) { }
+            const _err = console.error;
+            console.error = (...args) => {
+                if (args[0] && typeof args[0] === 'string' && args[0].includes('ResizeObserver')) return;
+                _err.call(console, ...args);
+            };
+            if (typeof ResizeObserver === 'undefined') {
+                window.ResizeObserver = function () {
+                    this.observe = () => { };
+                    this.unobserve = () => { };
+                    this.disconnect = () => { };
+                };
+            }
+        })();
+    </script>
+
+    <!-- React 17 -->
+    <script crossorigin src="https://unpkg.com/react@17/umd/react.production.min.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@17/umd/react-dom.production.min.js"></script>
+    <script src="https://unpkg.com/prop-types/prop-types.min.js"></script>
+    <script src="https://unpkg.com/recharts@2.5.0/umd/Recharts.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap"
+        rel="stylesheet" />
+
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #f3f4f6;
+        }
+
+        .glass-panel {
+            background: rgba(255, 255, 255, 0.95);
+            backdrop-filter: blur(10px);
+            border: 1px solid rgba(226, 232, 240, 0.8);
+        }
+
+        .animate-fade-in {
+            animation: fadeIn 0.6s cubic-bezier(0.16, 1, 0.3, 1);
+        }
+
+        @keyframes fadeIn {
+            from {
+                opacity: 0;
+                transform: translateY(20px);
+            }
+
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+
+        /* Print Styles */
+        @media print {
+            @page {
+                size: A4 landscape;
+                /* Landscape for better dashboard view */
+                margin: 10mm;
+            }
+
+            body {
+                background: white;
+                -webkit-print-color-adjust: exact;
+                print-color-adjust: exact;
+            }
+
+            /* STRICTLY HIDE USER INTERFACE */
+            aside,
+            nav,
+            .bg-slate-900,
+            button,
+            input,
+            .no-print {
+                display: none !important;
+            }
+
+            /* Hide the main dashboard container explicitly */
+            #root>div>main {
+                display: none !important;
+            }
+
+            /* Show Report */
+            .print-only {
+                display: block !important;
+                position: absolute;
+                top: 0;
+                left: 0;
+                width: 100vw;
+                height: 100vh;
+                background: white;
+                z-index: 99999;
+                padding: 20px;
+            }
+
+            /* Ensure charts render */
+            .print-chart {
+                break-inside: avoid;
+            }
+        }
+
+        .print-only {
+            display: none;
+        }
+
+        .modal-enter {
+            animation: modalPop 0.3s ease-out forwards;
+        }
+
+        @keyframes modalPop {
+            from {
+                opacity: 0;
+                transform: scale(0.95);
+            }
+
+            to {
+                opacity: 1;
+                transform: scale(1);
+            }
+        }
+    </style>
+</head>
+
+<body class="antialiased">
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState, useEffect, useMemo, useRef } = React;
+        const {
+            BarChart,
+            Bar,
+            XAxis,
+            YAxis,
+            CartesianGrid,
+            Tooltip,
+            Legend,
+            ResponsiveContainer,
+            PieChart,
+            Pie,
+            Cell,
+        } = window.Recharts;
+
+        // --- Icons ---
+        const Icon = ({ size = 24, className = '', children, ...props }) => (
+            <svg
+                xmlns="http://www.w3.org/2000/svg"
+                width={size}
+                height={size}
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                className={className}
+                {...props}
+            >
+                {children}
+            </svg>
+        );
+        const LayoutDashboard = (p) => (
+            <Icon {...p}>
+                <rect width="7" height="9" x="3" y="3" rx="1" />
+                <rect width="7" height="5" x="14" y="3" rx="1" />
+                <rect width="7" height="9" x="14" y="12" rx="1" />
+                <rect width="7" height="5" x="3" y="16" rx="1" />
+            </Icon>
+        );
+        const Calculator = (p) => (
+            <Icon {...p}>
+                <rect width="16" height="20" x="4" y="2" rx="2" />
+                <line x1="8" x2="16" y1="6" y2="6" />
+                <line x1="16" x2="16" y1="14" y2="18" />
+                <path d="M16 10h.01" />
+                <path d="M12 10h.01" />
+                <path d="M8 10h.01" />
+                <path d="M12 14h.01" />
+                <path d="M8 14h.01" />
+                <path d="M12 18h.01" />
+                <path d="M8 18h.01" />
+            </Icon>
+        );
+        const User = (p) => (
+            <Icon {...p}>
+                <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" />
+                <circle cx="12" cy="7" r="4" />
+            </Icon>
+        );
+        const UserMinus = (p) => (
+            <Icon {...p}>
+                <path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2" />
+                <circle cx="9" cy="7" r="4" />
+                <line x1="22" x2="16" y1="11" y2="11" />
+            </Icon>
+        );
+        const Users = (p) => (
+            <Icon {...p}>
+                <path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2" />
+                <circle cx="9" cy="7" r="4" />
+                <path d="M22 21v-2a4 4 0 0 0-3-3.87" />
+                <path d="M16 3.13a4 4 0 0 1 0 7.75" />
+            </Icon>
+        );
+        const AlertCircle = (p) => (
+            <Icon {...p}>
+                <circle cx="12" cy="12" r="10" />
+                <line x1="12" x2="12" y1="8" y2="12" />
+                <line x1="12" x2="12.01" y1="16" y2="16" />
+            </Icon>
+        );
+        const CheckCircle = (p) => (
+            <Icon {...p}>
+                <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14" />
+                <polyline points="22 4 12 14.01 9 11.01" />
+            </Icon>
+        );
+        const Activity = (p) => (
+            <Icon {...p}>
+                <path d="M22 12h-4l-3 9L9 3l-3 9H2" />
+            </Icon>
+        );
+        const DollarSign = (p) => (
+            <Icon {...p}>
+                <line x1="12" x2="12" y1="2" y2="22" />
+                <path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6" />
+            </Icon>
+        );
+        const Clock = (p) => (
+            <Icon {...p}>
+                <circle cx="12" cy="12" r="10" />
+                <polyline points="12 6 12 12 16 14" />
+            </Icon>
+        );
+        const UploadCloud = (p) => (
+            <Icon {...p}>
+                <path d="M4 14.899A7 7 0 1 1 15.71 8h1.79a4.5 4.5 0 0 1 2.5 8.242" />
+                <path d="M12 12v9" />
+                <path d="m16 16-4-4-4 4" />
+            </Icon>
+        );
+        const FileText = (p) => (
+            <Icon {...p}>
+                <path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5L14.5 2z" />
+                <polyline points="14 2 14 8 20 8" />
+            </Icon>
+        );
+        const Trash2 = (p) => (
+            <Icon {...p}>
+                <path d="M3 6h18" />
+                <path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6" />
+                <path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2" />
+                <line x1="10" x2="10" y1="11" y2="17" />
+                <line x1="14" x2="14" y1="11" y2="17" />
+            </Icon>
+        );
+        const Lightbulb = (p) => (
+            <Icon {...p}>
+                <line x1="9" x2="15" y1="18" y2="18" />
+                <line x1="10" x2="14" y1="22" y2="22" />
+                <path d="M15.09 14c.18-.98.65-1.74 1.41-2.5A4.65 4.65 0 0 0 12 2a4.65 4.65 0 0 0-4.5 9.5c.76.76 1.23 1.52 1.41 2.5" />
+            </Icon>
+        );
+        const AlertTriangle = (p) => (
+            <Icon {...p}>
+                <path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z" />
+                <line x1="12" x2="12" y1="9" y2="13" />
+                <line x1="12" x2="12.01" y1="17" y2="17" />
+            </Icon>
+        );
+        const Building2 = (p) => (
+            <Icon {...p}>
+                <path d="M6 22V4a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v18Z" />
+                <path d="M6 12H4a2 2 0 0 0-2 2v6a2 2 0 0 0 2 2h2" />
+                <path d="M18 9h2a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2h-2" />
+                <path d="M10 6h4" />
+                <path d="M10 10h4" />
+                <path d="M10 14h4" />
+                <path d="M10 18h4" />
+            </Icon>
+        );
+        const Download = (p) => (
+            <Icon {...p}>
+                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+                <polyline points="7 10 12 15 17 10" />
+                <line x1="12" x2="12" y1="15" y2="3" />
+            </Icon>
+        );
+
+        // --- Data Logic ---
+        const defaultStats = {
+            totalEmployees: 1470,
+            attritionRate: 16.1,
+            avgIncome: 6503,
+            avgAge: 36.9,
+            incomeGap: 0,
+            deptData: [
+                { name: 'R&D', attrition: 13.8 },
+                { name: 'Sales', attrition: 20.6 },
+                { name: 'HR', attrition: 19.0 },
+            ],
+            satisfactionData: [
+                { name: 'Low', value: 289, color: '#EF4444' },
+                { name: 'Medium', value: 280, color: '#F59E0B' },
+                { name: 'High', value: 442, color: '#10B981' },
+                { name: 'Very High', value: 459, color: '#3B82F6' },
+            ],
+            ageData: [
+                { name: '18-25', attrition: 35 },
+                { name: '26-35', attrition: 20 },
+                { name: '36-45', attrition: 12 },
+                { name: '46-60', attrition: 8 },
+            ],
+            educationData: [],
+            genderData: [],
+            maritalData: [],
+            suggestions: [
+                {
+                    type: 'critical',
+                    text: 'High turnover rate in Sales (20.6%). Consider reviewing incentive structures.',
+                },
+                {
+                    type: 'warning',
+                    text: 'Employees aged 18-25 have the highest attrition. Focus on early-career mentorship.',
+                },
+            ],
+            columnMapping: {},
+            lastUpdated: null,
+        };
+
+        const parseCSV = (text) => {
+            if (!text) return [];
+            // Handle possible BOM and normalize line endings
+            const cleaned = text.replace(/^\uFEFF/, '');
+            const lines = cleaned
+                .split(/\r\n|\n/)
+                .map((l) => l.trim())
+                .filter(Boolean);
+
+            if (lines.length === 0) return [];
+
+            // Robust CSV Line Parser (handles quoted values)
+            const parseLine = (line) => {
+                const values = [];
+                let current = '';
+                let inQuote = false;
+
+                for (let i = 0; i < line.length; i++) {
+                    const char = line[i];
+                    if (char === '"') {
+                        inQuote = !inQuote;
+                    } else if (char === ',' && !inQuote) {
+                        values.push(current.trim().replace(/^"|"$/g, '').trim());
+                        current = '';
+                    } else {
+                        current += char;
+                    }
+                }
+
+                values.push(current.trim().replace(/^"|"$/g, '').trim());
+                return values;
+            };
+
+            const headers = parseLine(lines[0]);
+            return lines.slice(1).map((line) => {
+                const values = parseLine(line);
+                const obj = {};
+                headers.forEach((h, i) => {
+                    if (h) obj[h] = values[i] || '';
+                });
+                return obj;
+            });
+        };
+
+        // SMART MAPPING
+        const COLUMN_SYNONYMS = {
+            Attrition: ['Attrition', 'Churn', 'Left', 'Status', 'Terminated', 'EmploymentStatus', 'Exited'],
+            Department: ['Department', 'Job Role', 'JobRole', 'Business Unit', 'Function', 'Role'],
+            MonthlyIncome: ['MonthlyIncome', 'Income', 'Salary', 'Pay', 'Wage', 'Gross Salary'],
+            Age: ['Age', 'YearsOld', 'DOB', 'Date of Birth'],
+            JobSatisfaction: ['JobSatisfaction', 'Satisfaction', 'Happiness', 'Work-Life Balance', 'Employee Satisfaction'],
+            Education: ['Education', 'EducationField', 'Degree', 'Qualification'],
+            Gender: ['Gender', 'Sex'],
+            MaritalStatus: ['MaritalStatus', 'Marital', 'Civil Status'],
+        };
+
+        const findKey = (obj, cat) => {
+            if (!obj) return null;
+            const keys = Object.keys(obj);
+            // 1. Exact match
+            let match = keys.find((k) => k.toLowerCase() === cat.toLowerCase());
+            if (match) return match;
+            // 2. Synonym match
+            return keys.find((k) =>
+                (COLUMN_SYNONYMS[cat] || []).some(
+                    (s) =>
+                        k
+                            .toLowerCase()
+                            .replace(/[^a-z0-9]/g, '') ===
+                        s
+                            .toLowerCase()
+                            .replace(/[^a-z0-9]/g, '')
+                )
+            );
+        };
+
+        const downloadCSV = (data, filename = 'analysis_report.csv') => {
+            if (!data || !data.length) return;
+
+            const headers = Object.keys(data[0]);
+            const headerRow = headers.join(',');
+
+            const rows = data.map(row => {
+                return headers.map(header => {
+                    let val = row[header] === null || row[header] === undefined ? '' : row[header];
+                    val = val.toString().replace(/"/g, '""'); // Escape double quotes
+                    if (val.includes(',') || val.includes('"') || val.includes('\n')) {
+                        val = `"${val}"`; // Wrap in quotes if needed
+                    }
+                    return val;
+                }).join(',');
+            });
+
+            const csvContent = [headerRow, ...rows].join('\n');
+            const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+            const link = document.createElement('a');
+            if (link.download !== undefined) {
+                const url = URL.createObjectURL(blob);
+                link.setAttribute('href', url);
+                link.setAttribute('download', filename);
+                link.style.visibility = 'hidden';
+                document.body.appendChild(link);
+                link.click();
+                document.body.removeChild(link);
+            }
+        };
+
+        const calculateAnalytics = (data) => {
+            const total = data.length;
+            if (total === 0) return { ...defaultStats, lastUpdated: null };
+
+            const k = {
+                att: findKey(data[0], 'Attrition'),
+                inc: findKey(data[0], 'MonthlyIncome'),
+                age: findKey(data[0], 'Age'),
+                dept: findKey(data[0], 'Department'),
+                sat: findKey(data[0], 'JobSatisfaction'),
+                edu: findKey(data[0], 'Education'),
+                gen: findKey(data[0], 'Gender'),
+                mar: findKey(data[0], 'MaritalStatus'),
+                ot: findKey(data[0], 'OverTime'),
+                ten: findKey(data[0], 'YearsAtCompany'),
+            };
+
+            let attCount = 0,
+                totalInc = 0,
+                totalAge = 0,
+                incStay = 0,
+                incLeft = 0,
+                cStay = 0,
+                cLeft = 0;
+
+            const depts = {};
+            const ageB = {
+                '18-25': { t: 0, a: 0 },
+                '26-35': { t: 0, a: 0 },
+                '36-45': { t: 0, a: 0 },
+                '46+': { t: 0, a: 0 },
+            };
+            const eduS = {};
+            const genS = {};
+            const marS = {};
+            const otS = {};
+            const tenB = { '0-2 Years': { t: 0, a: 0 }, '3-5 Years': { t: 0, a: 0 }, '6-10 Years': { t: 0, a: 0 }, '10+ Years': { t: 0, a: 0 } };
+            const satC = { Low: 0, Medium: 0, High: 0, 'Very High': 0 };
+
+            const attritionKeywords = ['yes', '1', 'true', 'left', 'terminated', 'quit', 'exited'];
+
+            data.forEach((d) => {
+                let left = false;
+
+                if (k.att) {
+                    const val = d[k.att];
+                    if (val !== undefined && val !== null) {
+                        const v = val.toString().toLowerCase().trim();
+                        if (attritionKeywords.includes(v)) {
+                            left = true;
+                            attCount++;
+                        }
+                    }
+                }
+
+                if (k.inc) {
+                    let v = d[k.inc];
+                    if (v !== undefined && v !== null) {
+                        v = parseFloat(v.toString().replace(/[$,k]/g, '').trim()) || 0;
+                        if (v > 0) {
+                            totalInc += v;
+                            if (left) {
+                                incLeft += v;
+                                cLeft++;
+                            } else {
+                                incStay += v;
+                                cStay++;
+                            }
+                        }
+                    }
+                }
+
+                if (k.age) {
+                    const rawAge = d[k.age];
+                    let v = parseFloat(rawAge);
+                    if (!isNaN(v)) {
+                        totalAge += v;
+                        let b = '46+';
+                        if (v <= 25) b = '18-25';
+                        else if (v <= 35) b = '26-35';
+                        else if (v <= 45) b = '36-45';
+
+                        if (!ageB[b]) ageB[b] = { t: 0, a: 0 };
+                        ageB[b].t++;
+                        if (left) ageB[b].a++;
+                    }
+                }
+
+                const dept = k.dept ? (d[k.dept] || 'Unknown').toString().trim() : 'All';
+                if (!depts[dept]) depts[dept] = { t: 0, a: 0 };
+                depts[dept].t++;
+                if (left) depts[dept].a++;
+
+                if (k.edu) {
+                    const v = (d[k.edu] || 'Unknown').toString().trim();
+                    if (!eduS[v]) eduS[v] = { t: 0, a: 0 };
+                    eduS[v].t++;
+                    if (left) eduS[v].a++;
+                }
+
+                if (k.gen) {
+                    const v = (d[k.gen] || 'Unknown').toString().trim();
+                    if (!genS[v]) genS[v] = { t: 0, a: 0 };
+                    genS[v].t++;
+                    if (left) genS[v].a++;
+                }
+
+                if (k.mar) {
+                    const v = (d[k.mar] || 'Unknown').toString().trim();
+                    if (!marS[v]) marS[v] = { t: 0, a: 0 };
+                    marS[v].t++;
+                    if (left) marS[v].a++;
+                }
+
+                if (k.sat && d[k.sat] !== undefined && d[k.sat] !== null) {
+                    let level = 'Medium';
+                    const val = d[k.sat].toString().toLowerCase();
+                    const n = parseInt(val, 10);
+
+                    if (!isNaN(n)) {
+                        if (n <= 1) level = 'Low';
+                        else if (n === 2) level = 'Medium';
+                        else if (n === 3) level = 'High';
+                        else level = 'Very High';
+                    } else {
+                        if (val.includes('low') || val.includes('poor') || val.includes('bad')) level = 'Low';
+                        else if (val.includes('very') || val.includes('excellent')) level = 'Very High';
+                        else if (val.includes('high') || val.includes('good')) level = 'High';
+                    }
+                    satC[level]++;
+                }
+
+                if (k.ot) {
+                    const v = (d[k.ot] || 'Unknown').toString().trim();
+                    if (!otS[v]) otS[v] = { t: 0, a: 0 };
+                    otS[v].t++;
+                    if (left) otS[v].a++;
+                }
+
+                if (k.ten) {
+                    const v = parseFloat(d[k.ten]);
+                    if (!isNaN(v)) {
+                        let b = '10+ Years';
+                        if (v <= 2) b = '0-2 Years';
+                        else if (v <= 5) b = '3-5 Years';
+                        else if (v <= 10) b = '6-10 Years';
+
+                        if (!tenB[b]) tenB[b] = { t: 0, a: 0 };
+                        tenB[b].t++;
+                        if (left) tenB[b].a++;
+                    }
+                }
+            });
+
+            const fmt = (obj, lim = 8) =>
+                Object.keys(obj)
+                    .map((n) => ({
+                        name: n,
+                        attrition: obj[n].t
+                            ? parseFloat(((obj[n].a / obj[n].t) * 100).toFixed(1))
+                            : 0,
+                    }))
+                    .sort((a, b) => b.attrition - a.attrition)
+                    .slice(0, lim);
+
+            const rate = total > 0 ? parseFloat(((attCount / total) * 100).toFixed(1)) : 0;
+            const gap =
+                k.inc && cStay > 0 && cLeft > 0
+                    ? Math.round(incStay / cStay) - Math.round(incLeft / cLeft)
+                    : null;
+
+            const sugg = [];
+            if (rate > 20) sugg.push({ type: 'critical', text: `Critical: Attrition is ${rate}%, very high.` });
+            else if (rate > 15) sugg.push({ type: 'warning', text: `Attrition is ${rate}%, above average.` });
+            else sugg.push({ type: 'success', text: `Attrition is healthy at ${rate}%.` });
+
+            const deptArr = fmt(depts);
+            if (deptArr.length > 0 && deptArr[0].attrition > 20) {
+                sugg.push({
+                    type: 'action',
+                    text: `Investigate ${deptArr[0].name} dept (${deptArr[0].attrition}% leaving).`,
+                });
+            }
+
+            if (gap && gap > 1000) {
+                sugg.push({ type: 'info', text: 'Pay Gap: Leavers earn significantly less.' });
+            }
+
+            if (ageB['18-25'] && ageB['18-25'].t > 0 && ageB['18-25'].a / ageB['18-25'].t > 0.25) {
+                sugg.push({
+                    type: 'info',
+                    text: 'High turnover in under-25s. Improve onboarding.',
+                });
+            }
+
+            return {
+                totalEmployees: total,
+                attritionRate: rate,
+                avgIncome: k.inc ? Math.round(totalInc / total) : 'N/A',
+                avgAge: k.age ? (totalAge / total).toFixed(1) : 'N/A',
+                incomeGap: gap,
+                deptData: deptArr,
+                ageData: k.age
+                    ? Object.keys(ageB).map((n) => ({
+                        name: n,
+                        attrition: ageB[n].t
+                            ? parseFloat(((ageB[n].a / ageB[n].t) * 100).toFixed(1))
+                            : 0,
+                    }))
+                    : [],
+                educationData: k.edu ? fmt(eduS) : [],
+                genderData: k.gen ? fmt(genS) : [],
+                maritalData: k.mar ? fmt(marS) : [],
+                overTimeData: k.ot ? fmt(otS) : [],
+                tenureData: k.ten ? Object.keys(tenB).map(n => ({
+                    name: n,
+                    attrition: tenB[n].t ? parseFloat(((tenB[n].a / tenB[n].t) * 100).toFixed(1)) : 0
+                })) : [],
+                satisfactionData: k.sat
+                    ? [
+                        { name: 'Low', value: satC['Low'], color: '#EF4444' },
+                        { name: 'Medium', value: satC['Medium'], color: '#F59E0B' },
+                        { name: 'High', value: satC['High'], color: '#10B981' },
+                        { name: 'Very High', value: satC['Very High'], color: '#3B82F6' },
+                    ].filter((d) => d.value > 0)
+                    : [],
+                suggestions: sugg,
+                columnMapping: k,
+                lastUpdated: Date.now(),
+            };
+        };
+
+        const Card = ({ children, className = '' }) => (
+            <div
+                className={`glass-panel rounded-xl shadow-sm border border-slate-100 p-6 ${className}`}
+            >
+                {children}
+            </div>
+        );
+
+        const StatCard = ({ title, value, icon: IconComp, color }) => (
+            <Card>
+                <div className="flex justify-between items-center">
+                    <div>
+                        <p className="text-sm text-slate-500 font-medium">{title}</p>
+                        <h3 className="text-2xl font-bold text-slate-800 mt-1">{value}</h3>
+                    </div>
+                    <div className={`p-3 rounded-xl ${color} bg-opacity-10`}>
+                        <IconComp size={24} className={color.replace('bg-', 'text-')} />
+                    </div>
+                </div>
+            </Card>
+        );
+
+        const SuggestionPanel = ({ suggestions }) => (
+            <div className="bg-gradient-to-r from-indigo-50 to-blue-50 border border-indigo-100 rounded-xl p-6 mb-8">
+                <div className="flex items-center gap-3 mb-4">
+                    <div className="bg-white p-2 rounded-lg text-indigo-600">
+                        <Lightbulb size={20} />
+                    </div>
+                    <h3 className="font-bold text-indigo-900">AI Recommendations</h3>
+                </div>
+                <div className="grid gap-3">
+                    {suggestions.map((s, i) => (
+                        <div
+                            key={i}
+                            className="flex gap-3 bg-white/60 p-3 rounded-lg border border-indigo-50"
+                        >
+                            <div
+                                className={`mt-1 w-2 h-2 rounded-full shrink-0 ${s.type === 'critical'
+                                    ? 'bg-red-500'
+                                    : s.type === 'warning'
+                                        ? 'bg-orange-500'
+                                        : s.type === 'success'
+                                            ? 'bg-green-500'
+                                            : 'bg-blue-500'
+                                    }`}
+                            />
+                            <p className="text-sm text-indigo-800">{s.text}</p>
+                        </div>
+                    ))}
+                </div>
+            </div>
+        );
+
+        const DashboardView = ({
+            stats, setStats,
+            fileName, setFileName,
+            showModal, setShowModal,
+            modalContent, setModalContent,
+            errorMsg, setErrorMsg,
+            uploadedData, setUploadedData,
+            isPredicting, setIsPredicting
+        }) => {
+            const fileRef = useRef(null);
+
+            const handleFile = (e) => {
+                const file = e.target.files[0];
+                if (!file) return;
+
+                setFileName(file.name);
+                setErrorMsg('');
+
+                const reader = new FileReader();
+                reader.onload = (ev) => {
+                    try {
+                        const parsed = parseCSV(ev.target.result);
+
+                        if (!parsed.length) {
+                            setStats(defaultStats);
+                            setErrorMsg('Uploaded CSV seems empty or invalid. Showing default demo data.');
+                            return;
+                        }
+
+
+                        setUploadedData(parsed);
+
+                        if (!findKey(parsed[0], 'Attrition')) {
+                            // Enable Batch Prediction Flow
+                            setModalContent('predict_confirm');
+                            setShowModal(true);
+                            return;
+                        }
+
+                        setStats(calculateAnalytics(parsed));
+                    } catch (err) {
+                        console.error('Error parsing CSV', err);
+                        setStats(defaultStats);
+                        setErrorMsg('Error parsing CSV file. Reverted to default demo data.');
+                    }
+                };
+                reader.readAsText(file);
+            };
+
+            const runBatchPrediction = async () => {
+                if (!uploadedData.length) return;
+                setIsPredicting(true);
+                setErrorMsg('');
+
+                try {
+                    const response = await fetch('http://127.0.0.1:5000/batch_predict', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ employees: uploadedData }),
+                    });
+
+                    if (!response.ok) throw new Error('Prediction API failed');
+
+                    const apiRes = await response.json();
+
+                    // Merge predictions back into data
+                    const mergedData = uploadedData.map((row, i) => {
+                        const pred = apiRes.predictions[i];
+                        return {
+                            ...row,
+                            Attrition: pred ? pred.Attrition : 'No',
+                            PredictionProbability: pred ? pred.Probability : 0
+                        };
+                    });
+
+                    setStats(calculateAnalytics(mergedData));
+                    setUploadedData(mergedData); // Update shared data
+                    setShowModal(false);
+                    setErrorMsg('✅ AI Prediction Complete. Showing predicted risks.');
+                } catch (err) {
+                    console.error(err);
+                    setErrorMsg('Failed to run batch prediction. Is the backend running?');
+                    // Fallback to showing data without attrition
+                    setStats(calculateAnalytics(uploadedData));
+                    setShowModal(false);
+                } finally {
+                    setIsPredicting(false);
+                }
+            };
+
+            const reset = () => {
+                setStats(defaultStats);
+                setFileName('Default Dataset');
+                setErrorMsg('');
+                setUploadedData([]);
+                if (fileRef.current) fileRef.current.value = '';
+            };
+
+            const formattedLastUpdated =
+                stats.lastUpdated &&
+                new Date(stats.lastUpdated).toLocaleString(undefined, {
+                    dateStyle: 'medium',
+                    timeStyle: 'short',
+                });
+
+            return (
+                <div className="ml-0 md:ml-64 p-6 md:p-8 space-y-6 animate-fade-in">
+                    <div className="flex flex-col md:flex-row justify-between items-start md:items-center mb-4 gap-4">
+                        <div>
+                            <h2 className="text-2xl font-bold text-slate-800">
+                                HR Analytics Overview
+                            </h2>
+                            <div className="flex flex-wrap items-center gap-3 mt-2 text-xs md:text-sm">
+                                <p className="text-slate-500 flex items-center gap-2">
+                                    <FileText size={14} /> Source: {fileName}
+                                </p>
+                                {formattedLastUpdated && (
+                                    <span className="px-2 py-1 rounded-full bg-slate-100 text-slate-500">
+                                        Last updated: {formattedLastUpdated}
+                                    </span>
+                                )}
+                            </div>
+                        </div>
+                        <div className="flex flex-wrap gap-3">
+                            <input
+                                type="file"
+                                ref={fileRef}
+                                onChange={handleFile}
+                                accept=".csv,text/csv"
+                                className="hidden"
+                            />
+
+                            {fileName !== 'Default Dataset' && (
+                                <>
+                                    <button
+                                        type="button"
+                                        onClick={() => downloadCSV(uploadedData, `Attrition_Report_${new Date().toISOString().slice(0, 10)}.csv`)}
+                                        className="flex items-center gap-2 px-4 py-2 bg-green-600 hover:bg-green-700 text-white rounded-lg text-sm font-medium transition-all shadow-sm"
+                                    >
+                                        <Download size={16} /> Download CSV
+                                    </button>
+                                    <button
+                                        type="button"
+                                        onClick={() => window.print()}
+                                        className="flex items-center gap-2 px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-sm font-medium transition-all shadow-sm"
+                                    >
+                                        <FileText size={16} /> Smart Report
+                                    </button>
+                                    <button
+                                        type="button"
+                                        onClick={reset}
+                                        className="flex items-center gap-2 bg-red-50 text-red-600 border border-red-200 px-4 py-2 rounded-lg text-sm font-medium hover:bg-red-100"
+                                    >
+                                        <Trash2 size={16} />
+                                        Remove File
+                                    </button>
+                                </>
+                            )}
+                            <button
+                                type="button"
+                                onClick={() => {
+                                    setModalContent('requirements');
+                                    setShowModal(true);
+                                }}
+                                className="flex items-center gap-2 bg-blue-600 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-blue-700"
+                            >
+                                <UploadCloud size={16} />
+                                Upload CSV
+                            </button>
+                        </div>
+                    </div>
+
+                    {errorMsg && (
+                        <div className="flex items-start gap-3 bg-amber-50 border border-amber-200 text-amber-800 px-4 py-3 rounded-lg text-sm">
+                            <AlertTriangle size={18} className="mt-0.5" />
+                            <span>{errorMsg}</span>
+                        </div>
+                    )}
+
+                    {showModal && (
+                        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 modal-enter backdrop-blur-sm">
+                            <div className="bg-white rounded-xl p-6 max-w-md w-full shadow-2xl">
+                                {modalContent === 'requirements' ? (
+                                    <>
+                                        <div className="flex items-center gap-3 text-amber-600 mb-4">
+                                            <AlertTriangle size={24} />
+                                            <h3 className="font-bold text-slate-800">Dataset Requirements</h3>
+                                        </div>
+                                        <p className="text-slate-600 text-sm mb-4">
+                                            For best results, upload a clean CSV with these columns (or close
+                                            synonyms):
+                                        </p>
+                                        <div className="bg-slate-50 p-4 rounded-lg border mb-6">
+                                            <ul className="grid grid-cols-2 gap-2 list-disc list-inside text-sm text-slate-500">
+                                                <li>Attrition / Status</li>
+                                                <li>Department / Role</li>
+                                                <li>Monthly Income</li>
+                                                <li>Age</li>
+                                                <li>Education</li>
+                                                <li>Gender</li>
+                                                <li>Marital Status</li>
+                                                <li>Job Satisfaction</li>
+                                            </ul>
+                                        </div>
+                                        <p className="text-xs text-slate-400 mb-6 italic">
+                                            * The system is smart enough to handle synonyms (e.g. &quot;Pay&quot;
+                                            instead of &quot;Income&quot;).
+                                        </p>
+                                        <div className="flex justify-end gap-3">
+                                            <button
+                                                type="button"
+                                                onClick={() => setShowModal(false)}
+                                                className="px-4 py-2 text-slate-500 hover:bg-slate-100 rounded-lg text-sm font-medium"
+                                            >
+                                                Cancel
+                                            </button>
+                                            <button
+                                                type="button"
+                                                onClick={() => {
+                                                    setShowModal(false);
+                                                    if (fileRef.current) fileRef.current.click();
+                                                }}
+                                                className="px-4 py-2 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700"
+                                            >
+                                                Select File
+                                            </button>
+                                        </div>
+                                    </>
+                                ) : (
+                                    <>
+                                        <div className="flex items-center gap-3 text-indigo-600 mb-4">
+                                            <Lightbulb size={24} />
+                                            <h3 className="font-bold text-slate-800">Use AI Prediction?</h3>
+                                        </div>
+                                        <p className="text-slate-600 text-sm mb-4">
+                                            We couldn't find an <strong>Attrition</strong> column in your file.
+                                        </p>
+                                        <p className="text-slate-600 text-sm mb-6">
+                                            Would you like to use our AI model to <strong>predict attrition risk</strong> for these employees?
+                                        </p>
+                                        <div className="flex justify-end gap-3">
+                                            <button
+                                                type="button"
+                                                disabled={isPredicting}
+                                                onClick={() => {
+                                                    setShowModal(false);
+                                                    setStats(calculateAnalytics(uploadedData)); // Show without attrition
+                                                    setErrorMsg('Showing data without attrition info.');
+                                                }}
+                                                className="px-4 py-2 text-slate-500 hover:bg-slate-100 rounded-lg text-sm font-medium"
+                                            >
+                                                No, just show data
+                                            </button>
+                                            <button
+                                                type="button"
+                                                disabled={isPredicting}
+                                                onClick={runBatchPrediction}
+                                                className="px-4 py-2 bg-indigo-600 text-white rounded-lg text-sm font-medium hover:bg-indigo-700 flex items-center gap-2"
+                                            >
+                                                {isPredicting ? 'Running...' : 'Yes, Run Prediction'}
+                                                {isPredicting && <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />}
+                                            </button>
+                                        </div>
+                                    </>
+                                )}
+                            </div>
+                        </div>
+                    )}
+
+                    <SuggestionPanel suggestions={stats.suggestions} />
+
+                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+                        <StatCard
+                            title="Total Employees"
+                            value={stats.totalEmployees.toLocaleString()}
+                            icon={Users}
+                            color="bg-blue-500"
+                        />
+                        <StatCard
+                            title="Overall Attrition"
+                            value={`${stats.attritionRate}%`}
+                            icon={UserMinus}
+                            color="bg-red-500"
+                        />
+                        <StatCard
+                            title="Avg Income"
+                            value={
+                                stats.avgIncome !== 'N/A'
+                                    ? `$${stats.avgIncome.toLocaleString()}`
+                                    : 'N/A'
+                            }
+                            icon={DollarSign}
+                            color="bg-emerald-500"
+                        />
+                        <StatCard
+                            title="Avg Age"
+                            value={stats.avgAge}
+                            icon={Clock}
+                            color="bg-purple-500"
+                        />
+                    </div>
+
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                        {stats.deptData.length > 0 && (
+                            <Card>
+                                <h3 className="font-bold text-slate-800 mb-4">
+                                    Attrition by Department
+                                </h3>
+                                <div className="h-64">
+                                    <ResponsiveContainer>
+                                        <BarChart data={stats.deptData}>
+                                            <CartesianGrid strokeDasharray="3 3" vertical={false} />
+                                            <XAxis
+                                                dataKey="name"
+                                                fontSize={10}
+                                                angle={-15}
+                                                textAnchor="end"
+                                            />
+                                            <YAxis />
+                                            <Tooltip />
+                                            <Bar
+                                                dataKey="attrition"
+                                                fill="#EF4444"
+                                                radius={[4, 4, 0, 0]}
+                                            />
+                                        </BarChart>
+                                    </ResponsiveContainer>
+                                </div>
+                            </Card>
+                        )}
+
+                        {stats.incomeGap !== null && (
+                            <Card className="border-l-4 border-l-orange-400">
+                                <h3 className="font-bold text-slate-800 mb-2">Income Impact</h3>
+                                <p className="text-sm text-slate-500 mb-4">
+                                    Do leavers earn less than stayers?
+                                </p>
+                                <div>
+                                    <p className="text-xs uppercase font-bold text-slate-400">
+                                        Monthly Gap
+                                    </p>
+                                    <h2
+                                        className={`text-2xl font-bold ${stats.incomeGap > 0 ? 'text-green-600' : 'text-red-600'
+                                            }`}
+                                    >
+                                        {stats.incomeGap > 0 ? '+' : '-'}$
+                                        {Math.abs(stats.incomeGap).toLocaleString()}
+                                    </h2>
+                                    <p className="text-xs text-slate-500 mt-1">
+                                        {stats.incomeGap > 0
+                                            ? 'Leavers tend to earn less.'
+                                            : 'Leavers tend to earn more.'}
+                                    </p>
+                                </div>
+                            </Card>
+                        )}
+
+                        {stats.ageData.length > 0 && (
+                            <Card>
+                                <h3 className="font-bold text-slate-800 mb-4">Attrition by Age</h3>
+                                <div className="h-64">
+                                    <ResponsiveContainer>
+                                        <BarChart data={stats.ageData}>
+                                            <CartesianGrid strokeDasharray="3 3" vertical={false} />
+                                            <XAxis dataKey="name" />
+                                            <YAxis />
+                                            <Tooltip />
+                                            <Bar
+                                                dataKey="attrition"
+                                                fill="#8884d8"
+                                                radius={[4, 4, 0, 0]}
+                                            />
+                                        </BarChart>
+                                    </ResponsiveContainer>
+                                </div>
+                            </Card>
+                        )}
+
+                        {stats.educationData.length > 0 && (
+                            <Card>
+                                <h3 className="font-bold text-slate-800 mb-4">
+                                    Attrition by Education
+                                </h3>
+                                <div className="h-64">
+                                    <ResponsiveContainer>
+                                        <BarChart data={stats.educationData} layout="vertical">
+                                            <CartesianGrid strokeDasharray="3 3" horizontal={false} />
+                                            <XAxis type="number" hide />
+                                            <YAxis
+                                                dataKey="name"
+                                                type="category"
+                                                width={90}
+                                                fontSize={10}
+                                            />
+                                            <Tooltip />
+                                            <Bar
+                                                dataKey="attrition"
+                                                fill="#F59E0B"
+                                                radius={[0, 4, 4, 0]}
+                                            />
+                                        </BarChart>
+                                    </ResponsiveContainer>
+                                </div>
+                            </Card>
+                        )}
+
+                        {stats.satisfactionData.length > 0 && (
+                            <Card>
+                                <h3 className="font-bold text-slate-800 mb-4">Job Satisfaction</h3>
+                                <div className="h-64">
+                                    <ResponsiveContainer>
+                                        <PieChart>
+                                            <Pie
+                                                data={stats.satisfactionData}
+                                                innerRadius={60}
+                                                outerRadius={80}
+                                                dataKey="value"
+                                            >
+                                                {stats.satisfactionData.map((e, i) => (
+                                                    <Cell key={i} fill={e.color} />
+                                                ))}
+                                            </Pie>
+                                            <Tooltip />
+                                            <Legend />
+                                        </PieChart>
+                                    </ResponsiveContainer>
+                                </div>
+                            </Card>
+                        )}
+                    </div>
+
+                    <div className="text-xs text-slate-400 mt-4 p-4 border-t border-slate-200">
+                        <h4 className="font-bold mb-2">Debug Info (Column Mapping)</h4>
+                        <div className="grid grid-cols-2 md:grid-cols-3 gap-2">
+                            {Object.entries(stats.columnMapping || {}).map(([k, v]) => (
+                                <div key={k}>
+                                    {k}:{' '}
+                                    <span className={v ? 'text-green-600' : 'text-red-400'}>
+                                        {v || 'Not Found'}
+                                    </span>
+                                </div>
+                            ))}
+                        </div>
+                    </div>
+                </div>
+            );
+        };
+
+        const PredictView = ({ uploadedData = [] }) => {
+            const [formData, setFormData] = useState({
+                Age: '',
+                BusinessTravel: 'Travel_Rarely',
+                DailyRate: '',
+                Department: 'Sales',
+                EnvironmentSatisfaction: 3,
+                JobSatisfaction: 2,
+                OverTime: 'Yes',
+                MonthlyIncome: 5000,
+                TotalWorkingYears: 8,
+                YearsAtCompany: 2,
+            });
+            const [result, setResult] = useState(null);
+            const [loading, setLoading] = useState(false);
+            const [selectedEmpIndex, setSelectedEmpIndex] = useState('');
+
+            const handleSelectEmployee = (e) => {
+                const idx = e.target.value;
+                setSelectedEmpIndex(idx);
+
+                if (idx === '' || !uploadedData[idx]) return;
+
+                const emp = uploadedData[idx];
+                const newForm = { ...formData };
+
+                // Map CSV columns to Form Fields
+                // Helper to find value by synonym
+                const getVal = (key) => {
+                    const foundKey = findKey(emp, key);
+                    return foundKey ? emp[foundKey] : '';
+                };
+
+                // Auto-fill fields (basic mapping)
+                const fields = Object.keys(formData);
+                fields.forEach(f => {
+                    const val = getVal(f);
+                    if (val) newForm[f] = val;
+                });
+
+                setFormData(newForm);
+            };
+
+            // Dynamic Departments from Uploaded Data
+            const departments = useMemo(() => {
+                const defaults = ['Sales', 'Research & Development', 'Human Resources'];
+                if (!uploadedData || uploadedData.length === 0) return defaults;
+
+                const deptKey = findKey(uploadedData[0], 'Department');
+                if (!deptKey) return defaults;
+
+                const distinct = new Set(defaults);
+                uploadedData.forEach(row => {
+                    if (row[deptKey]) distinct.add(row[deptKey].trim());
+                });
+                return Array.from(distinct).sort();
+            }, [uploadedData]);
+
+            const handleChange = (e) => {
+                const { name, value } = e.target;
+                setFormData((prev) => ({
+                    ...prev,
+                    [name]: value,
+                }));
+            };
+
+            const setVal = (name, val) => {
+                setFormData((prev) => ({
+                    ...prev,
+                    [name]: val,
+                }));
+            };
+
+            const simulatePrediction = async () => {
+                setLoading(true);
+                setResult(null);
+
+                try {
+                    const response = await fetch('http://127.0.0.1:5000/predict', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(formData),
+                    });
+
+                    if (!response.ok) {
+                        throw new Error(`API responded with status ${response.status}`);
+                    }
+
+                    const data = await response.json();
+                    setResult({
+                        prediction: data.prediction,
+                        probability: data.probability,
+                        factors: [
+                            formData.OverTime === 'Yes'
+                                ? 'High Impact: OverTime is Yes'
+                                : null,
+                            parseInt(formData.MonthlyIncome, 10) < 3500
+                                ? 'High Impact: Low Income'
+                                : null,
+                        ].filter(Boolean),
+                    });
+                } catch (error) {
+                    console.error('API Error', error);
+                    setTimeout(() => {
+                        let score = 0;
+                        if (formData.OverTime === 'Yes') score += 30;
+                        if (parseInt(formData.MonthlyIncome, 10) < 4000) score += 20;
+                        let prob = 10 + score;
+                        if (prob > 95) prob = 95;
+                        setResult({
+                            prediction: prob > 50 ? 'Yes' : 'No',
+                            probability: prob,
+                            factors: ['Demo Mode (API not reachable)'],
+                        });
+                    }, 400);
+                } finally {
+                    setLoading(false);
+                }
+            };
+
+            return (
+                <div className="ml-0 md:ml-64 p-6 md:p-8 animate-fade-in relative z-0">
+                    <div className="mb-6">
+                        <h2 className="text-2xl font-bold text-slate-800">
+                            Employee Attrition Prediction
+                        </h2>
+                        <p className="text-slate-500 text-sm">
+                            Use the form below or select an employee from your uploaded file to predict attrition probability.
+                        </p>
+                    </div>
+
+                    {uploadedData.length > 0 && (
+                        <div className="mb-8 bg-white p-4 rounded-xl border border-blue-100 shadow-sm flex items-center gap-4">
+                            <div className="bg-blue-50 p-2 rounded-lg text-blue-600">
+                                <Users size={20} />
+                            </div>
+                            <div className="flex-1">
+                                <label className="block text-sm font-bold text-slate-700 mb-1">
+                                    Auto-fill from Uploaded File
+                                </label>
+                                <select
+                                    className="w-full p-2 bg-slate-50 border border-slate-200 rounded-lg text-sm"
+                                    value={selectedEmpIndex}
+                                    onChange={handleSelectEmployee}
+                                >
+                                    <option value="">-- Select an Employee --</option>
+                                    {uploadedData.slice(0, 100).map((emp, i) => (
+                                        <option key={i} value={i}>
+                                            #{i + 1} - {findKey(emp, 'JobRole') ? emp[findKey(emp, 'JobRole')] : 'Employee'}
+                                            ({findKey(emp, 'Department') ? emp[findKey(emp, 'Department')] : 'Unknown Dept'})
+                                        </option>
+                                    ))}
+                                </select>
+                            </div>
+                        </div>
+                    )}
+
+                    <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+                        <Card className="lg:col-span-2 border-2 border-indigo-100/50 shadow-lg">
+                            <h3 className="text-lg font-bold text-slate-800 mb-4 flex items-center gap-2">
+                                <User size={20} /> Employee Details
+                            </h3>
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                <div>
+                                    <label className="block text-xs font-bold text-slate-500 uppercase mb-2">
+                                        Age
+                                    </label>
+                                    <input
+                                        type="number"
+                                        name="Age"
+                                        value={formData.Age}
+                                        onChange={handleChange}
+                                        className="w-full p-3 bg-slate-100 border-0 rounded-lg focus:ring-2 focus:ring-indigo-500 transition-all"
+                                        min="18"
+                                        max="70"
+                                    />
+                                </div>
+
+                                <div>
+                                    <label className="block text-xs font-bold text-slate-500 uppercase mb-2">
+                                        Department
+                                    </label>
+                                    <select
+                                        name="Department"
+                                        value={formData.Department}
+                                        onChange={handleChange}
+                                        className="w-full p-3 bg-slate-100 border-0 rounded-lg focus:ring-2 focus:ring-indigo-500 transition-all"
+                                    >
+                                        {departments.map(dept => (
+                                            <option key={dept} value={dept}>{dept}</option>
+                                        ))}
+                                    </select>
+                                </div>
+
+                                <div>
+                                    <label className="block text-xs font-bold text-slate-500 uppercase mb-2">
+                                        Distance From Home (km)
+                                    </label>
+                                    <input
+                                        type="range"
+                                        min="1"
+                                        max="50"
+                                        name="DistanceFromHome"
+                                        value={formData.DistanceFromHome}
+                                        onChange={handleChange}
+                                        className="w-full h-2 bg-slate-200 rounded-lg appearance-none cursor-pointer accent-indigo-600"
+                                    />
+                                    <div className="flex justify-between text-xs text-slate-400 mt-1">
+                                        <span>1 km</span>
+                                        <span>{formData.DistanceFromHome} km</span>
+                                        <span>50 km</span>
+                                    </div>
+                                </div>
+
+                                <div>
+                                    <label className="block text-xs font-bold text-slate-500 uppercase mb-2">
+                                        OverTime
+                                    </label>
+                                    <div className="flex gap-2">
+                                        <button
+                                            type="button"
+                                            onClick={() => setVal('OverTime', 'Yes')}
+                                            className={`flex-1 py-2 rounded-lg font-bold transition-all ${formData.OverTime === 'Yes'
+                                                ? 'bg-red-100 text-red-600 border border-red-200'
+                                                : 'bg-slate-100 text-slate-400 hover:bg-slate-200'
+                                                }`}
+                                        >
+                                            Yes
+                                        </button>
+                                        <button
+                                            type="button"
+                                            onClick={() => setVal('OverTime', 'No')}
+                                            className={`flex-1 py-2 rounded-lg font-bold transition-all ${formData.OverTime === 'No'
+                                                ? 'bg-green-100 text-green-600 border border-green-200'
+                                                : 'bg-slate-100 text-slate-400 hover:bg-slate-200'
+                                                }`}
+                                        >
+                                            No
+                                        </button>
+                                    </div>
+                                </div>
+
+                                <div>
+                                    <label className="block text-xs font-bold text-slate-500 uppercase mb-2">
+                                        Job Satisfaction (1-4)
+                                    </label>
+                                    <div className="flex gap-2">
+                                        {[1, 2, 3, 4].map((n) => (
+                                            <button
+                                                type="button"
+                                                key={n}
+                                                onClick={() => setVal('JobSatisfaction', n)}
+                                                className={`flex-1 py-2 rounded-lg font-bold transition-all ${parseInt(formData.JobSatisfaction, 10) === n
+                                                    ? 'bg-blue-600 text-white shadow-md'
+                                                    : 'bg-slate-100 text-slate-400 hover:bg-slate-200'
+                                                    }`}
+                                            >
+                                                {n}
+                                            </button>
+                                        ))}
+                                    </div>
+                                </div>
+
+                                <div>
+                                    <label className="block text-xs font-bold text-slate-500 uppercase mb-2">
+                                        Env Satisfaction (1-4)
+                                    </label>
+                                    <div className="flex gap-2">
+                                        {[1, 2, 3, 4].map((n) => (
+                                            <button
+                                                type="button"
+                                                key={n}
+                                                onClick={() => setVal('EnvironmentSatisfaction', n)}
+                                                className={`flex-1 py-2 rounded-lg font-bold transition-all ${parseInt(formData.EnvironmentSatisfaction, 10) === n
+                                                    ? 'bg-blue-600 text-white shadow-md'
+                                                    : 'bg-slate-100 text-slate-400 hover:bg-slate-200'
+                                                    }`}
+                                            >
+                                                {n}
+                                            </button>
+                                        ))}
+                                    </div>
+                                </div>
+
+                                <div className="md:col-span-2">
+                                    <label className="block text-xs font-bold text-slate-500 uppercase mb-2">
+                                        Monthly Income ($)
+                                    </label>
+                                    <div className="relative">
+                                        <DollarSign
+                                            size={16}
+                                            className="absolute left-3 top-3.5 text-slate-400"
+                                        />
+                                        <input
+                                            type="number"
+                                            name="MonthlyIncome"
+                                            value={formData.MonthlyIncome}
+                                            onChange={handleChange}
+                                            className="w-full p-3 pl-9 bg-slate-100 border-0 rounded-lg focus:ring-2 focus:ring-indigo-500 transition-all font-mono text-lg"
+                                            min="0"
+                                        />
+                                    </div>
+                                </div>
+
+                                <div>
+                                    <label className="block text-xs font-bold text-slate-500 uppercase mb-2">
+                                        Total Working Years
+                                    </label>
+                                    <input
+                                        type="number"
+                                        name="TotalWorkingYears"
+                                        value={formData.TotalWorkingYears}
+                                        onChange={handleChange}
+                                        className="w-full p-3 bg-slate-100 border-0 rounded-lg"
+                                        min="0"
+                                    />
+                                </div>
+
+                                <div>
+                                    <label className="block text-xs font-bold text-slate-500 uppercase mb-2">
+                                        Years At Company
+                                    </label>
+                                    <input
+                                        type="number"
+                                        name="YearsAtCompany"
+                                        value={formData.YearsAtCompany}
+                                        onChange={handleChange}
+                                        className="w-full p-3 bg-slate-100 border-0 rounded-lg"
+                                        min="0"
+                                    />
+                                </div>
+                            </div>
+
+                            <button
+                                type="button"
+                                onClick={simulatePrediction}
+                                disabled={loading}
+                                className="w-full mt-8 bg-slate-800 text-white font-bold py-4 rounded-xl shadow-lg hover:bg-slate-900 transition-all flex items-center justify-center gap-2 disabled:opacity-70 disabled:cursor-not-allowed"
+                            >
+                                {loading ? (
+                                    'Calculating...'
+                                ) : (
+                                    <>
+                                        <Calculator size={20} /> Calculate Attrition Probability
+                                    </>
+                                )}
+                            </button>
+                        </Card>
+
+                        <div className="h-full">
+                            {result ? (
+                                <Card
+                                    className={`h-full border-t-4 flex flex-col justify-center items-center ${result.prediction === 'Yes'
+                                        ? 'border-t-red-500 bg-red-50/50'
+                                        : 'border-t-green-500 bg-green-50/50'
+                                        }`}
+                                >
+                                    <div
+                                        className={`w-24 h-24 rounded-full flex items-center justify-center mb-6 ${result.prediction === 'Yes'
+                                            ? 'bg-red-100 text-red-600'
+                                            : 'bg-green-100 text-green-600'
+                                            }`}
+                                    >
+                                        {result.prediction === 'Yes' ? (
+                                            <AlertCircle size={48} />
+                                        ) : (
+                                            <CheckCircle size={48} />
+                                        )}
+                                    </div>
+                                    <h2 className="text-xs font-bold uppercase tracking-widest text-slate-400">
+                                        Prediction Result
+                                    </h2>
+                                    <div className="mt-2 text-6xl font-black text-slate-800">
+                                        {result.probability}%
+                                    </div>
+                                    <p
+                                        className={`font-bold mt-2 text-xl ${result.prediction === 'Yes'
+                                            ? 'text-red-600'
+                                            : 'text-green-600'
+                                            }`}
+                                    >
+                                        {result.prediction === 'Yes'
+                                            ? 'High Risk'
+                                            : 'Likely to Stay'}
+                                    </p>
+                                    <div className="mt-8 w-full bg-white/60 p-4 rounded-lg border border-slate-200/50">
+                                        <p className="text-xs font-bold text-slate-400 uppercase mb-2 flex items-center gap-2">
+                                            <Activity size={14} /> Risk Factors
+                                        </p>
+                                        <ul className="space-y-2">
+                                            {result.factors && result.factors.length > 0 ? (
+                                                result.factors.map((f, i) => (
+                                                    <li
+                                                        key={i}
+                                                        className="text-sm text-slate-600 flex items-center gap-2"
+                                                    >
+                                                        <div className="w-1.5 h-1.5 bg-red-500 rounded-full" />
+                                                        {f}
+                                                    </li>
+                                                ))
+                                            ) : (
+                                                <li className="text-sm text-green-600">
+                                                    No major risks detected.
+                                                </li>
+                                            )}
+                                        </ul>
+                                    </div>
+                                </Card>
+                            ) : (
+                                <div className="h-full border-2 border-dashed border-slate-200 rounded-xl flex flex-col items-center justify-center text-slate-300 p-8">
+                                    <Building2 size={64} className="mb-4" />
+                                    <p className="font-medium">Result will appear here</p>
+                                    <p className="text-xs text-slate-400 mt-1 text-center">
+                                        Fill the form on the left and click &quot;Calculate&quot; to
+                                        see the prediction.
+                                    </p>
+                                </div>
+                            )}
+                        </div>
+                    </div>
+                </div>
+            );
+        };
+
+        // --- Report Component ---
+        const ReportView = ({ stats, uploadedData }) => {
+            const problems = [];
+            const solutions = [];
+
+            // Narrative Generation (New)
+            const generateNarrative = () => {
+                const total = stats.totalEmployees || 0;
+                const rate = stats.attritionRate || 0;
+                let text = `Based on the analysis of ${total} employee records, the organization currently faces an overall attrition rate of ${rate}%. `;
+
+                // Health Check
+                if (rate > 15) text += "This is effectively high, indicating potential retention issues that need immediate strategic intervention. ";
+                else if (rate > 10) text += "This is slightly above industry average, suggesting room for improvement in employee engagement. ";
+                else text += "This indicates a healthy retention level, though specific pockets of risk may still exist. ";
+
+                // Department
+                const riskyDept = stats.deptData && stats.deptData[0];
+                if (riskyDept && riskyDept.attrition > 15) {
+                    text += `The ${riskyDept.name} department shows disproportionately high turnover (${riskyDept.attrition}%), serving as a primary driver for these figures. `;
+                }
+
+                // Age
+                const youngRisk = stats.ageData && stats.ageData.find(a => a.name === '18-25' && a.attrition > 20);
+                if (youngRisk) {
+                    text += "Demographically, early-career employees (18-25) are leaving at an accelerated rate, pointing to potential gaps in onboarding or initial career development paths. ";
+                }
+
+                // OverTime
+                const otRisk = stats.overTimeData && stats.overTimeData.find(d => d.name === 'Yes' && d.attrition > 20);
+                if (otRisk) {
+                    text += "Significantly, employees working OverTime are showing marked instability, strongly correlating burnout with exit decisions. ";
+                }
+
+                text += "Comprehensive data breakdown follows below.";
+                return text;
+            };
+
+            const narrative = generateNarrative();
+            // OverTime/Tenure Logic
+            const highOt = stats.overTimeData && stats.overTimeData.find(d => d.name === 'Yes' && d.attrition > 20);
+            if (highOt) {
+                problems.push({ cat: 'Burnout', text: `OverTime Attrition: ${highOt.attrition}%` });
+                solutions.push({ cat: 'Balance', text: 'Review workload distribution' });
+            }
+
+            // Analysis Logic
+            if (stats.attritionRate > 15) {
+                problems.push({ cat: 'Critical', text: `Overall Attrition ${stats.attritionRate}% (High)` });
+                solutions.push({ cat: 'Strategy', text: 'Implement retention program' });
+            }
+            const highAttrDept = stats.deptData.find(d => d.attrition > 20);
+            if (highAttrDept) {
+                problems.push({ cat: 'Dept', text: `${highAttrDept.name} Attrition: ${highAttrDept.attrition}%` });
+                solutions.push({ cat: 'Action', text: `Audit ${highAttrDept.name} workflows` });
+            }
+            const youngChurn = stats.ageData.find(a => a.name === '18-25' && a.attrition > 25);
+            if (youngChurn) {
+                problems.push({ cat: 'Age', text: 'High Risk in 18-25 Group' });
+                solutions.push({ cat: 'Mentorship', text: 'Launch Early-Career Program' });
+            }
+            if (problems.length === 0) {
+                problems.push({ cat: 'Good', text: 'Metrics are healthy.' });
+                solutions.push({ cat: 'Maintain', text: 'Continue monitoring.' });
+            }
+
+            return (
+                <div className="print-only font-sans text-slate-900">
+                    {/* Header */}
+                    <div className="flex justify-between items-center border-b-2 border-slate-800 pb-4 mb-6">
+                        <h1 className="text-3xl font-black uppercase">Analytics Report</h1>
+                        <div className="text-right">
+                            <p className="text-sm font-bold text-slate-500">{new Date().toLocaleDateString()}</p>
+                            <p className="text-xs text-slate-400 uppercase">AttritionAI Generated</p>
+                        </div>
+                    </div>
+
+                    {/* Metrics Row */}
+                    <div className="grid grid-cols-4 gap-4 mb-8">
+                        <div className="p-4 bg-slate-50 border border-slate-200 rounded text-center">
+                            <p className="text-xs font-bold text-slate-400 uppercase">Total Employees</p>
+                            <p className="text-2xl font-black">{stats.totalEmployees}</p>
+                        </div>
+                        <div className="p-4 bg-slate-50 border border-slate-200 rounded text-center">
+                            <p className="text-xs font-bold text-slate-400 uppercase">Attrition Rate</p>
+                            <p className={`text-2xl font-black ${stats.attritionRate > 15 ? 'text-red-600' : 'text-green-600'}`}>{stats.attritionRate}%</p>
+                        </div>
+                        <div className="p-4 bg-slate-50 border border-slate-200 rounded text-center">
+                            <p className="text-xs font-bold text-slate-400 uppercase">Risk Depts</p>
+                            <p className="text-2xl font-black text-orange-500">{stats.deptData.length}</p>
+                        </div>
+                        <div className="p-4 bg-slate-50 border border-slate-200 rounded text-center">
+                            <p className="text-xs font-bold text-slate-400 uppercase">Est. Cost</p>
+                            <p className="text-2xl font-black">${(Math.round(stats.totalEmployees * (stats.attritionRate / 100) * 20000 / 1000))}k</p>
+                        </div>
+                    </div>
+
+                    {/* Executive Summary (Detailed Narrative) */}
+                    <div className="mb-8 p-6 bg-blue-50/50 border border-blue-100 rounded-lg">
+                        <h3 className="text-sm font-bold uppercase text-blue-800 mb-2">Executive Summary</h3>
+                        <p className="text-sm text-slate-700 leading-relaxed text-justify">
+                            {narrative}
+                        </p>
+                    </div>
+
+                    {/* Insights & Charts Grid */}
+                    <div className="grid grid-cols-3 gap-6">
+                        {/* Column 1: Insights & Dept Chart */}
+                        <div className="space-y-8">
+                            <div className="border border-slate-200 rounded p-4">
+                                <h3 className="text-sm font-bold uppercase border-b border-slate-200 pb-2 mb-3">Key Risk Factors</h3>
+                                <ul className="space-y-2">
+                                    {problems.map((p, i) => (
+                                        <li key={i} className="flex items-center gap-2 text-sm font-medium text-red-700">
+                                            <span className="w-2 h-2 rounded-full bg-red-500"></span>
+                                            {p.text}
+                                        </li>
+                                    ))}
+                                </ul>
+                            </div>
+
+                            <div className="print-chart">
+                                <h3 className="text-xs font-bold uppercase mb-2 text-slate-400">Department Attrition</h3>
+                                <div className="space-y-2">
+                                    {stats.deptData.slice(0, 5).map(d => (
+                                        <div key={d.name} className="flex items-center gap-2">
+                                            <span className="w-20 text-[10px] font-bold text-right shrink-0 truncate">{d.name}</span>
+                                            <div className="flex-1 h-2 bg-slate-100 rounded-full overflow-hidden">
+                                                <div className="h-full bg-slate-800" style={{ width: `${d.attrition}%` }}></div>
+                                            </div>
+                                            <span className="w-6 text-[10px] font-bold text-right">{d.attrition}%</span>
+                                        </div>
+                                    ))}
+                                </div>
+                            </div>
+
+                            {stats.genderData && stats.genderData.length > 0 && (
+                                <div className="print-chart">
+                                    <h3 className="text-xs font-bold uppercase mb-2 text-slate-400">Gender Risk</h3>
+                                    <div className="space-y-2">
+                                        {stats.genderData.map(d => (
+                                            <div key={d.name} className="flex items-center gap-2">
+                                                <span className="w-20 text-[10px] font-bold text-right shrink-0 truncate">{d.name}</span>
+                                                <div className="flex-1 h-2 bg-slate-100 rounded-full overflow-hidden">
+                                                    <div className="h-full bg-purple-600" style={{ width: `${d.attrition}%` }}></div>
+                                                </div>
+                                                <span className="w-6 text-[10px] font-bold text-right">{d.attrition}%</span>
+                                            </div>
+                                        ))}
+                                    </div>
+                                </div>
+                            )}
+                        </div>
+
+                        {/* Column 2: Solutions & Age Chart */}
+                        <div className="space-y-8">
+                            <div className="border border-slate-200 rounded p-4">
+                                <h3 className="text-sm font-bold uppercase border-b border-slate-200 pb-2 mb-3">Recommended Actions</h3>
+                                <ul className="space-y-2">
+                                    {solutions.map((s, i) => (
+                                        <li key={i} className="flex items-center gap-2 text-sm font-medium text-blue-700">
+                                            <span className="w-2 h-2 rounded-full bg-blue-500"></span>
+                                            {s.text}
+                                        </li>
+                                    ))}
+                                </ul>
+                            </div>
+
+                            <div className="print-chart">
+                                <h3 className="text-xs font-bold uppercase mb-2 text-slate-400">Age Group Risk</h3>
+                                <div className="space-y-2">
+                                    {stats.ageData.map(d => (
+                                        <div key={d.name} className="flex items-center gap-2">
+                                            <span className="w-20 text-[10px] font-bold text-right shrink-0">{d.name}</span>
+                                            <div className="flex-1 h-2 bg-slate-100 rounded-full overflow-hidden">
+                                                <div className="h-full bg-orange-500" style={{ width: `${d.attrition}%` }}></div>
+                                            </div>
+                                            <span className="w-6 text-[10px] font-bold text-right">{d.attrition}%</span>
+                                        </div>
+                                    ))}
+                                </div>
+                            </div>
+
+                            {stats.maritalData && stats.maritalData.length > 0 && (
+                                <div className="print-chart">
+                                    <h3 className="text-xs font-bold uppercase mb-2 text-slate-400">Marital Status</h3>
+                                    <div className="space-y-2">
+                                        {stats.maritalData.map(d => (
+                                            <div key={d.name} className="flex items-center gap-2">
+                                                <span className="w-20 text-[10px] font-bold text-right shrink-0 truncate">{d.name}</span>
+                                                <div className="flex-1 h-2 bg-slate-100 rounded-full overflow-hidden">
+                                                    <div className="h-full bg-pink-500" style={{ width: `${d.attrition}%` }}></div>
+                                                </div>
+                                                <span className="w-6 text-[10px] font-bold text-right">{d.attrition}%</span>
+                                            </div>
+                                        ))}
+                                    </div>
+                                </div>
+                            )}
+                        </div>
+
+                        {/* Column 3: Work Factors (New) */}
+                        <div className="space-y-6">
+                            <div className="border border-slate-200 rounded p-4 h-fit bg-slate-50">
+                                <h3 className="text-sm font-bold uppercase border-b border-slate-200 pb-2 mb-3 text-slate-600">Work Factors</h3>
+                                <div className="space-y-4">
+                                    {/* OverTime */}
+                                    {stats.overTimeData && stats.overTimeData.length > 0 && (
+                                        <div>
+                                            <h4 className="text-[10px] font-bold uppercase text-slate-400 mb-2">OverTime Impact</h4>
+                                            <div className="space-y-2">
+                                                {stats.overTimeData.map(d => (
+                                                    <div key={d.name} className="flex items-center gap-2">
+                                                        <span className="w-12 text-[10px] font-bold text-right shrink-0">{d.name}</span>
+                                                        <div className="flex-1 h-2 bg-slate-200 rounded-full overflow-hidden">
+                                                            <div className={`h-full ${d.name === 'Yes' ? 'bg-red-600' : 'bg-green-600'}`} style={{ width: `${d.attrition}%` }}></div>
+                                                        </div>
+                                                        <span className="w-8 text-[10px] font-bold text-right">{d.attrition}%</span>
+                                                    </div>
+                                                ))}
+                                            </div>
+                                        </div>
+                                    )}
+
+                                    {/* Tenure */}
+                                    {stats.tenureData && stats.tenureData.length > 0 && (
+                                        <div>
+                                            <h4 className="text-[10px] font-bold uppercase text-slate-400 mb-2">Tenure Risk</h4>
+                                            <div className="space-y-2">
+                                                {stats.tenureData.map(d => (
+                                                    <div key={d.name} className="flex items-center gap-2">
+                                                        <span className="w-16 text-[10px] font-bold text-right shrink-0">{d.name}</span>
+                                                        <div className="flex-1 h-2 bg-slate-200 rounded-full overflow-hidden">
+                                                            <div className="h-full bg-indigo-600" style={{ width: `${d.attrition}%` }}></div>
+                                                        </div>
+                                                        <span className="w-8 text-[10px] font-bold text-right">{d.attrition}%</span>
+                                                    </div>
+                                                ))}
+                                            </div>
+                                        </div>
+                                    )}
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            );
+        };
+
+        const Navigation = ({ activeTab, setActiveTab }) => (
+            <aside className="w-64 bg-slate-900 text-white min-h-screen flex flex-col fixed left-0 top-0 z-50">
+                <div className="p-6 border-b border-slate-800 flex items-center gap-3">
+                    <div className="bg-blue-600 p-2 rounded-lg">
+                        <Activity size={24} />
+                    </div>
+                    <div>
+                        <h1 className="font-bold text-lg">
+                            Attrition<span className="text-blue-400">AI</span>
+                        </h1>
+                        <p className="text-[10px] text-slate-400 uppercase">
+                            by Adesh Pagar
+                        </p>
+                    </div>
+                </div>
+                <nav className="flex-1 p-4 space-y-2 mt-4">
+                    <button
+                        type="button"
+                        onClick={() => setActiveTab('dashboard')}
+                        className={`w-full flex items-center gap-3 px-3 py-3 rounded-xl transition-all text-sm ${activeTab === 'dashboard'
+                            ? 'bg-blue-600 shadow-lg'
+                            : 'hover:bg-slate-800 text-slate-400'
+                            }`}
+                    >
+                        <LayoutDashboard size={20} />
+                        Dashboard
+                    </button>
+                    <button
+                        type="button"
+                        onClick={() => setActiveTab('predict')}
+                        className={`w-full flex items-center gap-3 px-3 py-3 rounded-xl transition-all text-sm ${activeTab === 'predict'
+                            ? 'bg-blue-600 shadow-lg'
+                            : 'hover:bg-slate-800 text-slate-400'
+                            }`}
+                    >
+                        <Calculator size={20} />
+                        Prediction Tool
+                    </button>
+                </nav>
+                <div className="p-4 text-[10px] text-slate-500 border-t border-slate-800">
+                    <p>HR Analytics • Attrition Predictor</p>
+                </div>
+            </aside>
+        );
+
+        const App = () => {
+            const [activeTab, setActiveTab] = useState('dashboard');
+
+            // Dashboard State Lifted
+            const [stats, setStats] = useState(defaultStats);
+            const [fileName, setFileName] = useState('Default Dataset');
+            const [showModal, setShowModal] = useState(false);
+            const [modalContent, setModalContent] = useState('requirements');
+            const [errorMsg, setErrorMsg] = useState('');
+            const [uploadedData, setUploadedData] = useState([]);
+            const [isPredicting, setIsPredicting] = useState(false);
+
+            return (
+                <div className="flex min-h-screen">
+                    <ReportView stats={stats} uploadedData={uploadedData} />
+                    <Navigation activeTab={activeTab} setActiveTab={setActiveTab} />
+                    <main className="flex-1 w-full bg-slate-50">
+                        {activeTab === 'dashboard' ? (
+                            <DashboardView
+                                stats={stats} setStats={setStats}
+                                fileName={fileName} setFileName={setFileName}
+                                showModal={showModal} setShowModal={setShowModal}
+                                modalContent={modalContent} setModalContent={setModalContent}
+                                errorMsg={errorMsg} setErrorMsg={setErrorMsg}
+                                uploadedData={uploadedData} setUploadedData={setUploadedData}
+                                isPredicting={isPredicting} setIsPredicting={setIsPredicting}
+                            />
+                        ) : (
+                            <PredictView uploadedData={uploadedData} />
+                        )}
+                    </main>
+                </div>
+            );
+        };
+
+        ReactDOM.render(<App />, document.getElementById('root'));
+    </script>
+</body>
+
+</html>
